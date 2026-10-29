@@ -1,0 +1,11 @@
+{
+  "name": "loop-hero-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "《循环勇者》(Loop Hero) 的网页复刻：卡牌铺地 + 自动远征 + 营地养成",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node tests/logic.test.mjs && node tests/sim.test.mjs && node tests/render.test.mjs"
+  }
+}

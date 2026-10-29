@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>循环勇者 · Loop Hero 复刻</title>
+  <link rel="stylesheet" href="./css/style.css" />
+  <link rel="stylesheet" href="./css/theme-modern.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="stage">
+      <canvas id="game" width="1280" height="720"></canvas>
+
+      <div id="hud" class="hidden">
+        <div class="hud-top">
+          <div class="run-info">
+            <span>第 <b id="loopNum">1</b> 圈</span>
+            <span class="sep">·</span>
+            <span>第 <b id="dayNum">1</b> 天</span>
+          </div>
+
+          <div class="boss-meter" id="bossMeter" title="每放置一张卡牌，巫妖的宫殿就更近一步"
+            data-tip="&lt;b&gt;首领进度&lt;/b&gt;&lt;p&gt;每放置一张卡牌 +5%，满格且达到指定圈数后，首领出现在环线上。&lt;/p&gt;">
+            <div class="boss-fill" id="bossFill"></div>
+            <span class="boss-text"><span id="bossLabel">巫妖的注视</span> <b id="bossPct">0%</b></span>
+          </div>
+
+          <div class="top-buttons">
+            <button id="btnSpeed" title="切换速度（快捷键 S）">×1</button>
+            <button id="btnPause" title="暂停（空格）">暂停</button>
+            <button id="btnRetreat" title="带着战利品返回营地">撤退</button>
+          </div>
+        </div>
+
+        <div class="hud-left">
+          <div class="portrait">
+            <div class="portrait-art" id="classGlyph">♞</div>
+            <span class="lvl" id="heroLevel">Lv.1</span>
+          </div>
+          <div class="hero-block">
+            <div class="hero-name" id="heroName">战士</div>
+            <div class="bar hp"><div class="fill" id="hpFill"></div><span id="hpText">110 / 110</span></div>
+            <div class="bar xp"><div class="fill" id="xpFill"></div><span id="xpText">0 / 12</span></div>
+            <div class="stats">
+              <span data-tip="&lt;b&gt;攻击&lt;/b&gt;&lt;p&gt;每次攻击的基础伤害，受武器与天赋影响。&lt;/p&gt;">攻 <b id="stAtk">9</b></span>
+              <span data-tip="&lt;b&gt;防御&lt;/b&gt;&lt;p&gt;按比例减免受到的伤害。&lt;/p&gt;">防 <b id="stDef">2</b></span>
+              <span data-tip="&lt;b&gt;攻速&lt;/b&gt;&lt;p&gt;每秒攻击次数，受森林、河流与装备影响。&lt;/p&gt;">速 <b id="stSpd">1.0</b></span>
+              <span data-tip="&lt;b&gt;暴击&lt;/b&gt;&lt;p&gt;造成 1.6 倍伤害的概率。&lt;/p&gt;">暴 <b id="stCrit">5%</b></span>
+              <span data-tip="&lt;b&gt;吸血&lt;/b&gt;&lt;p&gt;造成伤害时按比例回复生命。&lt;/p&gt;">吸 <b id="stVamp">0%</b></span>
+              <span data-tip="&lt;b&gt;回复&lt;/b&gt;&lt;p&gt;每秒自然回复的生命值。&lt;/p&gt;">愈 <b id="stRegen">0.3</b></span>
+            </div>
+            <div class="equip-row" id="equipRow"></div>
+          </div>
+          <button id="btnPotion" class="potion" title="饮用治疗药水（Q）">
+            <span class="flask">⚗</span><b id="potionNum">1</b><kbd>Q</kbd>
+          </button>
+        </div>
+
+        <div class="hud-res" id="runRes"></div>
+        <div class="quest-chip hidden" id="questBox"></div>
+
+        <div class="hud-hand">
+          <div class="hand-cards" id="handCards"></div>
+          <div class="hand-meta">
+            <span id="deckInfo">牌库 0 · 弃牌 0</span>
+            <span class="hint">1–7 选牌 · 右键牌弃掉 · Esc 取消</span>
+          </div>
+        </div>
+
+        <div class="combat-tip hidden" id="combatTip"></div>
+      </div>
+
+      <div class="toast" id="toast"></div>
+      <div class="place-hint hidden" id="placeHint"></div>
+
+      <div id="campScreen" class="screen hidden"></div>
+      <div id="codexScreen" class="screen hidden"></div>
+      <div id="overlay" class="screen hidden"></div>
+    </div>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
