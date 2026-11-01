@@ -8,7 +8,7 @@ export const CLASSES = {
     tagline: '铁壁与反击',
     desc: '生命与防御最高。受击时有 20% 概率以 80% 攻击力反击。',
     base: {
-      maxHp: 115, atk: 10, def: 3, atkSpeed: 1.05,
+      maxHp: 123, atk: 10, def: 3, atkSpeed: 1.05,
       crit: 0.05, critDmg: 1.6, vamp: 0, regen: 0.3, evade: 0.02, speed: 2.15,
     },
     slots: [

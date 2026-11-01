@@ -61,6 +61,22 @@ html, body {
   border-radius: 999px;
   box-shadow: 0 0 14px rgba(160, 120, 210, 0.35);
 }
+.boss-chase {
+  position: absolute;
+  left: 1.5em;
+  top: 6.2em;
+  z-index: 9;
+  padding: 0.35em 0.9em;
+  border-radius: 999px;
+  border: 1px solid rgba(208, 90, 76, 0.5);
+  background: rgba(26, 14, 14, 0.88);
+  color: #e0b0a4;
+  font-size: 0.62em;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.boss-chase.hidden { display: none; }
 .boss-text { font-size: 0.64em; letter-spacing: 0.14em; color: #cbbfe0; }
 
 .top-buttons button {
@@ -419,6 +435,27 @@ html, body {
 }
 .bcard:hover { border-color: rgba(226, 191, 122, 0.35); transform: translateY(-2px); }
 .bcard.maxed { opacity: 0.5; }
+.bcard.locked { opacity: 0.5; cursor: not-allowed; }
+.bcost .req { color: #c08a8a; }
+.tier-block h3 {
+  margin: 0.9em 0 0.45em;
+  font-size: 0.64em;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  color: var(--gold-dim);
+}
+.next-goal {
+  width: 100%;
+  margin: 0.2em 0 0.4em;
+  padding: 0.55em 0.9em;
+  border-radius: 10px;
+  border: 1px dashed rgba(226, 191, 122, 0.35);
+  background: rgba(226, 191, 122, 0.05);
+  color: var(--gold);
+  font-size: 0.68em;
+  text-align: left;
+  cursor: pointer;
+}
 .bglyph {
   border-radius: 10px;
   border: 1px solid rgba(226, 191, 122, 0.2);
@@ -554,6 +591,15 @@ button.start:hover { color: #17130c; transform: translateY(-1px); box-shadow: 0 
 .cx-head b { color: var(--text); font-size: 0.86em; }
 .cx-head span { color: var(--muted); font-size: 0.58em; border: 1px solid var(--line-soft); border-radius: 999px; padding: 0 0.5em; }
 .cx-body p { margin: 0.35em 0 0; color: #a8a294; font-size: 0.68em; line-height: 1.55; }
+.ability-tags { display: flex; flex-wrap: wrap; gap: 0.3em; margin-top: 0.45em; }
+.ability-tags span {
+  font-size: 0.56em;
+  color: #c7b9a0;
+  border: 1px solid rgba(226, 191, 122, 0.22);
+  background: rgba(226, 191, 122, 0.06);
+  border-radius: 999px;
+  padding: 0.1em 0.55em;
+}
 
 @media (max-width: 900px) {
   #codexScreen { padding: 1.4em 1.1em; }
@@ -588,6 +634,28 @@ button.start:hover { color: #17130c; transform: translateY(-1px); box-shadow: 0 
   text-shadow: none;
 }
 .overlay-inner .kicker { color: var(--gold-dim); letter-spacing: 0.35em; }
+.loot-modal { width: min(42em, 92%); }
+.loot-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8em; margin-top: 1.2em; }
+.loot-side {
+  padding: 0.85em 0.9em;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.02);
+}
+.loot-side h3 { margin: 0; font-size: 0.62em; letter-spacing: 0.2em; color: var(--muted); font-weight: 500; }
+.loot-name { margin: 0.35em 0 0.6em; color: var(--gold); font-size: 0.9em; }
+.loot-stats { display: flex; flex-direction: column; gap: 0.25em; }
+.loot-stats span { display: flex; justify-content: space-between; font-size: 0.7em; color: var(--muted); }
+.loot-stats b { color: var(--text); font-weight: 500; }
+.pause-modal { width: min(38em, 92%); }
+.inv-head { display: flex; justify-content: space-between; margin-top: 1em; padding-bottom: 0.4em; border-bottom: 1px solid var(--line-soft); font-size: 0.72em; color: var(--muted); }
+.inv-head b { color: var(--gold); font-weight: 500; letter-spacing: 0.15em; }
+.inv-list { display: flex; flex-direction: column; gap: 0.35em; max-height: 15em; overflow-y: auto; margin-top: 0.6em; }
+.inv-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 0.5em; align-items: center; padding: 0.35em 0.5em; border: 1px solid var(--line-soft); border-radius: 8px; }
+.inv-name { font-size: 0.7em; color: var(--text); }
+.inv-slot { font-size: 0.58em; color: var(--muted); }
+.inv-row button { font-size: 0.58em; padding: 0.2em 0.55em; border-radius: 6px; border: 1px solid var(--line-soft); background: rgba(255,255,255,0.03); color: var(--muted); cursor: pointer; }
+.inv-row button:hover { color: var(--gold); border-color: rgba(226,191,122,0.4); }
 
 .trait {
   border-radius: 14px;
@@ -617,3 +685,18 @@ button.ghost {
   background: rgba(255, 255, 255, 0.03);
 }
 .result-stats b { font-family: "Loop Sans", sans-serif; color: var(--gold); }
+.bank-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4em;
+  margin-top: 1em;
+}
+.bank-list span {
+  font-size: 0.62em;
+  padding: 0.25em 0.7em;
+  border-radius: 999px;
+  border: 1px solid rgba(226, 191, 122, 0.25);
+  color: #d8c9a8;
+  background: rgba(226, 191, 122, 0.06);
+}

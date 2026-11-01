@@ -1,14 +1,16 @@
 // 营地、升级抉择、结算等全屏界面
 import { BUILDINGS, RES_NAMES, BUILDING_BY_ID } from '../data/buildings.js';
 import { cardPool, CARDS, deckFromMeta, autoDeck } from '../data/cards.js';
-import { canAfford, buildingCost } from '../systems/camp.js';
+import { canAfford, buildingCost, missingRequires, requirementText } from '../systems/camp.js';
 import { TRAITS } from '../data/traits.js';
 import { CLASSES, CLASS_ORDER, classUnlocked } from '../data/classes.js';
 import { chapterList, chapterUnlocked, chapterById } from '../data/chapters.js';
 import { ENEMIES } from '../data/enemies.js';
+import { describeAbilities } from '../data/abilities.js';
 import { CROSS_COMBOS } from '../world/loopMap.js';
 import { seenCard, seenCombo, seenEnemy } from '../systems/codex.js';
 import { toast } from './hud.js';
+import { STAT_LABELS, STAT_PERCENT } from '../core/config.js';
 
 let G = null;
 
@@ -30,28 +32,48 @@ export function showCamp(game) {
   const camp = campEl();
   camp.classList.remove('hidden');
 
-  const buildings = BUILDINGS.map((b) => {
+  const buildingCards = {};
+  for (const b of BUILDINGS) {
     const lv = meta.buildings[b.id] || 0;
     const maxed = lv >= b.maxLevel;
+    const missing = maxed ? [] : missingRequires(meta, b.id, lv + 1);
+    const locked = missing.length > 0;
     const cost = buildingCost(meta, b.id);
-    const afford = cost && canAfford(meta, cost);
-    const costText = maxed ? '<span class="max">已满级</span>' : Object.entries(cost)
-      .filter(([, v]) => v > 0)
-      .map(([k, v]) => `<span class="${k}">${RES_NAMES[k]} ${v}</span>`).join(' · ');
-    const costPlain = maxed ? '已满级' : Object.entries(cost)
-      .filter(([, v]) => v > 0)
-      .map(([k, v]) => `${RES_NAMES[k]} ${v}`).join(' · ');
-    const tip = `<b>${b.name}</b><span class="tt-kind">${lv} / ${b.maxLevel}</span><p>${b.desc(Math.max(1, lv))}${maxed ? '' : `<br>费用：${costPlain}`}</p>`;
+    const afford = !locked && cost && canAfford(meta, cost);
+    const costText = maxed ? '<span class="max">已满级</span>' : locked
+      ? `<span class="req">需要：${requirementText(missing)}</span>`
+      : Object.entries(cost)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `<span class="${k}">${RES_NAMES[k]} ${v}</span>`).join(' · ');
+    const costPlain = maxed ? '已满级' : locked
+      ? `需要：${requirementText(missing)}`
+      : Object.entries(cost)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `${RES_NAMES[k]} ${v}`).join(' · ');
+    const tip = `<b>${b.name}</b><span class="tt-kind">${lv} / ${b.maxLevel}</span><p>${b.desc(Math.max(1, lv))}${maxed ? '' : `<br>${locked ? `前置：${requirementText(missing)}` : `费用：${costPlain}`}`}</p>`;
 
-    return `<div class="bcard ${maxed ? 'maxed' : ''} ${afford ? 'afford' : ''}" data-build="${b.id}" data-tip="${tip.replace(/"/g, '&quot;')}">
+    buildingCards[b.id] = `<div class="bcard ${maxed ? 'maxed' : ''} ${locked ? 'locked' : ''} ${afford ? 'afford' : ''}" data-build="${b.id}" data-tip="${tip.replace(/"/g, '&quot;')}">
       <div class="bglyph">${b.glyph}</div>
       <div class="bmain">
         <div class="bhead"><span class="bname">${b.name}</span><span class="blv">${lv} / ${b.maxLevel}</span></div>
         <div class="bdesc">${b.desc(Math.max(1, lv))}</div>
-        <div class="bcost">${costText}${maxed ? '' : '<span class="build-tag">建造</span>'}</div>
+        <div class="bcost">${costText}${maxed || locked ? '' : '<span class="build-tag">建造</span>'}</div>
       </div>
     </div>`;
+  }
+
+  const tierHtml = [1, 2, 3].map((tier) => {
+    const list = BUILDINGS.filter((b) => (b.tier || 1) === tier);
+    if (!list.length) return '';
+    const label = tier === 1 ? '基础' : tier === 2 ? '进阶' : '高阶';
+    return `<div class="tier-block"><h3>${label}</h3><div class="bgrid">${list.map((b) => buildingCards[b.id]).join('')}</div></div>`;
   }).join('');
+
+  const nextGoal = BUILDINGS
+    .filter((b) => (meta.buildings[b.id] || 0) < b.maxLevel && missingRequires(meta, b.id).length === 0)
+    .map((b) => ({ b, cost: buildingCost(meta, b.id) }))
+    .filter((x) => x.cost && canAfford(meta, x.cost))
+    .sort((a, b) => Object.values(a.cost).reduce((s, v) => s + v, 0) - Object.values(b.cost).reduce((s, v) => s + v, 0))[0];
 
   const activeClass = classUnlocked(meta, meta.classId) ? meta.classId : 'warrior';
   const classCards = CLASS_ORDER.map((id) => {
@@ -107,7 +129,8 @@ export function showCamp(game) {
         </section>
         <section class="camp-buildings">
           <h2>营地</h2>
-          <div class="bgrid">${buildings}</div>
+          ${nextGoal ? `<button class="next-goal" data-build="${nextGoal.b.id}">下一目标：${nextGoal.b.name} · ${Object.entries(nextGoal.cost).filter(([, v]) => v > 0).map(([k, v]) => `${RES_NAMES[k]} ${v}`).join(' · ')}</button>` : ''}
+          ${tierHtml}
         </section>
       </div>
 
@@ -343,11 +366,13 @@ export function showCodex(game, initialTab = 'cards') {
       const list = tab === 'enemies' ? enemies : bosses;
       body = list.map(([id, e]) => {
         const seen = seenEnemy(meta, id);
+        const abilities = describeAbilities({ abilities: e.abilities });
         return `<article class="cx-entry ${seen ? '' : 'locked'}">
           <div class="cx-glyph" style="--c:${e.color}">${seen ? '兽' : '？'}</div>
           <div class="cx-body">
             <div class="cx-head"><b>${seen ? e.name : '？？？'}</b><span>${e.boss ? '首领' : '敌人'}</span></div>
             <p>${seen ? `生命 ${e.hp} · 攻击 ${e.atk} · 攻速 ${e.speed}` : '在远征中遭遇后记录。'}</p>
+            ${seen && abilities.length ? `<div class="ability-tags">${abilities.map((a) => `<span title="${a.desc}">${a.name}</span>`).join('')}</div>` : ''}
           </div>
         </article>`;
       }).join('');
@@ -391,6 +416,42 @@ export function showCodex(game, initialTab = 'cards') {
   render();
 }
 
+export function showLoot(game, payload) {
+  const overlay = overlayEl();
+  const labels = STAT_LABELS;
+  const fmt = (k, v) => {
+    if (STAT_PERCENT.has(k)) return `${Math.round(v * 1000) / 10}%`;
+    if (k === 'atkSpeed') return `+${Math.round(v * 100) / 100}`;
+    return `${v > 0 ? '+' : ''}${Math.round(v * 10) / 10}`;
+  };
+  const card = (item, title) => `<div class="loot-side">
+    <h3>${title}</h3>
+    <div class="loot-name">${item.name}</div>
+    <div class="loot-stats">
+      ${Object.entries(item.stats || {}).map(([k, v]) => `<span><i>${labels[k] || k}</i><b>${fmt(k, v)}</b></span>`).join('')}
+    </div>
+  </div>`;
+
+  overlay.classList.remove('hidden');
+  overlay.innerHTML = `<div class="overlay-inner loot-modal">
+    <p class="kicker">拾取装备</p>
+    <h2>${payload.item.name}</h2>
+    <p class="muted">背包 ${game.run.hero.inventory.length} / ${game.run.hero.maxInventory}，选择如何处理这件装备。</p>
+    <div class="loot-compare">
+      ${card(payload.current || { name: '空', stats: {} }, '当前')}
+      ${card(payload.item, '拾取')}
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="lootEquip">换上（1）</button>
+      <button class="ghost" id="lootStash">收进背包（2）</button>
+      <button class="ghost" id="lootDiscard">丢弃（3）</button>
+    </div>
+  </div>`;
+  document.getElementById('lootEquip').addEventListener('click', () => game.resolveLoot('equip'));
+  document.getElementById('lootStash').addEventListener('click', () => game.resolveLoot('stash'));
+  document.getElementById('lootDiscard').addEventListener('click', () => game.resolveLoot('discard'));
+}
+
 export function showTraits(game, choices) {
   const overlay = overlayEl();
   overlay.classList.remove('hidden');
@@ -412,17 +473,42 @@ export function showTraits(game, choices) {
 
 export function showPause(game) {
   const overlay = overlayEl();
+  const h = game.run.hero;
+  const inv = h.inventory || [];
   overlay.classList.remove('hidden');
-  overlay.innerHTML = `<div class="overlay-inner small-modal">
+  overlay.innerHTML = `<div class="overlay-inner small-modal pause-modal">
     <h2>暂停</h2>
     <p class="muted">英雄停下了脚步，但首领仍在等待。</p>
+    <div class="inv-head"><b>背包</b><span>${inv.length} / ${h.maxInventory}</span></div>
+    <div class="inv-list">
+      ${inv.length ? inv.map((it, i) => `<div class="inv-row">
+        <span class="inv-name">${it.name}</span>
+        <span class="inv-slot">${it.slotName}</span>
+        <button data-invequip="${i}">换上</button>
+        <button data-invdrop="${i}">丢弃</button>
+      </div>`).join('') : '<p class="muted">背包为空。</p>'}
+    </div>
     <div class="modal-actions">
       <button class="primary" id="btnResume">继续</button>
+      <button class="ghost" id="btnAutoEquip">${game.meta.autoEquip ? '拾取面板：关' : '拾取面板：开'}</button>
       <button class="ghost" id="btnQuitRun">撤退回营地</button>
     </div>
   </div>`;
   document.getElementById('btnResume').addEventListener('click', () => game.togglePause());
   document.getElementById('btnQuitRun').addEventListener('click', () => { hideOverlay(); game.retreat(true); });
+  document.getElementById('btnAutoEquip').addEventListener('click', () => game.toggleAutoEquip());
+  overlay.querySelectorAll('[data-invequip]').forEach((node) => {
+    node.addEventListener('click', () => game.equipFromInventory(Number(node.dataset.invequip)));
+  });
+  overlay.querySelectorAll('[data-invdrop]').forEach((node) => {
+    node.addEventListener('click', () => game.discardInventory(Number(node.dataset.invdrop)));
+  });
+}
+
+function bankRow(run) {
+  const list = run.bankList || [];
+  if (!list.length) return '';
+  return `<div class="bank-list">${list.map((r) => `<span>${r.label} +${r.amount}</span>`).join('')}</div>`;
 }
 
 export function showDeath(game) {
@@ -437,8 +523,11 @@ export function showDeath(game) {
     <div class="result-stats">
       <div><span>击杀</span><b>${run.kills}</b></div>
       <div><span>到达圈数</span><b>${run.loop}</b></div>
-      <div><span>带回魂晶</span><b>${run.resources.soul}</b></div>
+      <div><span>铺牌</span><b>${run.cardsPlayed}</b></div>
+      <div><span>造成伤害</span><b>${Math.round(run.dmgDealt)}</b></div>
+      <div><span>承受伤害</span><b>${Math.round(run.dmgTaken)}</b></div>
     </div>
+    ${bankRow(run)}
     <div class="modal-actions">
       <button class="primary" id="btnBackCamp">返回营地</button>
     </div>
@@ -458,8 +547,11 @@ export function showVictory(game) {
     <div class="result-stats">
       <div><span>圈数</span><b>${run.loop}</b></div>
       <div><span>击杀</span><b>${run.kills}</b></div>
-      <div><span>带回魂晶</span><b>${run.resources.soul}</b></div>
+      <div><span>铺牌</span><b>${run.cardsPlayed}</b></div>
+      <div><span>造成伤害</span><b>${Math.round(run.dmgDealt)}</b></div>
+      <div><span>承受伤害</span><b>${Math.round(run.dmgTaken)}</b></div>
     </div>
+    ${bankRow(run)}
     <div class="modal-actions">
       <button class="primary" id="btnBackCamp">凯旋</button>
     </div>

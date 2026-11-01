@@ -8,11 +8,12 @@ export function defaultMeta() {
   BUILDINGS.forEach((b) => { buildings[b.id] = 0; });
   return {
     version: 4,
-    resources: { wood: 0, stone: 0, soul: 0 },
+    resources: { wood: 0, stone: 0, soul: 0, metal: 0, shard: 0, tome: 0 },
     buildings,
     codex: { cards: {}, combos: {}, enemies: {} },
     classId: 'warrior',
     deck: [],
+    autoEquip: false,
     chapter: 1,
     chapterMax: 1,
     infinite: false,
@@ -48,6 +49,7 @@ export function loadMeta() {
     if (Array.isArray(data.deck)) {
       meta.deck = data.deck.filter((id) => typeof id === 'string').slice(0, 30);
     }
+    meta.autoEquip = !!data.autoEquip;
     const ch = Number(data.chapter);
     if (ch >= 1 && ch <= 4) meta.chapter = ch;
     const max = Number(data.chapterMax);

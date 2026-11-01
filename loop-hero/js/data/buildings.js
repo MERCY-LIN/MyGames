@@ -119,6 +119,51 @@ export const BUILDINGS = [
   },
 ];
 
+const UPGRADE_TREE = {
+  gym: { requires: (lv) => (lv >= 2 ? [{ id: 'campfire', level: 2 }] : []) },
+  smelter: {
+    maxLevel: 2, tier: 2,
+    requires: (lv) => (lv >= 2 ? [{ id: 'forge', level: 1 }] : []),
+    cost: (lv) => ({ wood: 10 * lv, stone: 16 * lv, soul: 2 * lv, metal: lv >= 2 ? 3 : 0 }),
+  },
+  library: {
+    maxLevel: 2, tier: 2,
+    requires: (lv) => (lv >= 2 ? [{ id: 'academy', level: 1 }] : []),
+    cost: (lv) => ({ wood: 10 * lv, stone: 8 * lv, soul: 2 * lv, shard: lv >= 2 ? 2 : 0 }),
+  },
+  academy: {
+    maxLevel: 2, tier: 2,
+    requires: (lv) => (lv >= 2 ? [{ id: 'library', level: 1 }] : []),
+    cost: (lv) => ({ wood: 8 * lv, stone: 10 * lv, soul: 6 * lv, shard: lv >= 2 ? 3 : 0 }),
+  },
+  intel: {
+    maxLevel: 3, tier: 3,
+    requires: (lv) => (lv >= 3 ? [{ id: 'library', level: 1 }] : []),
+    cost: (lv) => ({ wood: 5 * lv, stone: 5 * lv, soul: 3 * lv, shard: lv >= 3 ? 3 : 0 }),
+  },
+  healerHut: {
+    maxLevel: 2, tier: 2,
+    requires: (lv) => (lv >= 2 ? [{ id: 'inn', level: 1 }] : []),
+  },
+  armory: {
+    maxLevel: 2, tier: 2,
+    requires: (lv) => (lv >= 2 ? [{ id: 'forge', level: 1 }] : []),
+    cost: (lv) => ({ wood: 8 * lv, stone: 16 * lv, soul: 2 * lv, metal: lv >= 2 ? 4 : 0 }),
+  },
+  forge: {
+    tier: 2,
+    requires: (lv) => (lv >= 2 ? [{ id: 'smithy', level: 1 }] : []),
+    cost: (lv) => ({ wood: 10 * lv, stone: 14 * lv, soul: 2 * lv, metal: lv >= 2 ? 4 : 0 }),
+  },
+};
+
+for (const b of BUILDINGS) {
+  Object.assign(b, { tier: 1, requires: () => [] }, UPGRADE_TREE[b.id] || {});
+}
+
 export const BUILDING_BY_ID = Object.fromEntries(BUILDINGS.map((b) => [b.id, b]));
 
-export const RES_NAMES = { wood: '木材', stone: '石料', soul: '魂晶' };
+export const RES_NAMES = {
+  wood: '木材', stone: '石料', soul: '魂晶',
+  metal: '稳定金属', shard: '记忆碎片', tome: '古籍',
+};

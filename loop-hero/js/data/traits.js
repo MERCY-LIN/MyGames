@@ -13,7 +13,7 @@ export const TRAITS = [
 
   // 战士
   { id: 'shieldWall', name: '盾墙', glyph: '盾', desc: '防御 +3。', classes: ['warrior'], apply(h) { h.bonus.def += 3; } },
-  { id: 'riposte', name: '还击', glyph: '还', desc: '反击概率 +12%。', classes: ['warrior'], apply(h) { h.counterChance += 0.12; } },
+  { id: 'riposte', name: '还击', glyph: '还', desc: '反击概率 +12%。', classes: ['warrior'], apply(h) { h.bonus.counterChance += 0.12; } },
   { id: 'unyielding', name: '不屈', glyph: '屈', desc: '最大生命 +30，每秒回复 +0.3。', classes: ['warrior'], apply(h) { h.bonus.maxHp += 30; h.bonus.regen += 0.3; } },
 
   // 盗贼

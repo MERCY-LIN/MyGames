@@ -1,6 +1,7 @@
 // 地图：闭合环线、路边/野地槽位、卡牌放置与地形统计
 import { CARDS } from '../data/cards.js';
 import { GRID_W, GRID_H } from '../core/config.js';
+import { rng } from '../core/rng.js';
 
 export function key(x, y) { return `${x},${y}`; }
 
@@ -293,7 +294,7 @@ export function spawnEnemies(map, loop, makeEnemy) {
       if (!c.card) continue;
       const def = CARDS[c.card.variant || c.card.id];
       if (!def || !def.spawn) continue;
-      const elite = Math.random() < 0.06 + loop * 0.012;
+      const elite = rng.chance(0.06 + loop * 0.012);
       out.push(makeEnemy(def.spawn, loop, { elite, cell: adjacentPath(map, c) }));
     }
   }

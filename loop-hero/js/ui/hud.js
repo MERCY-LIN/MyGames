@@ -1,6 +1,8 @@
 // 运行中的 HUD：血条、属性、手牌、资源、提示
 import { CARDS } from '../data/cards.js';
 import { CLASSES } from '../data/classes.js';
+import { RES_NAMES } from '../data/buildings.js';
+import { STAT_LABELS, STAT_PERCENT } from '../core/config.js';
 
 let G = null;
 const el = {};
@@ -10,7 +12,7 @@ let toastTimer = 0;
 export function initHUD(game) {
   G = game;
   const ids = [
-    'hud', 'loopNum', 'dayNum', 'bossMeter', 'bossFill', 'bossPct', 'bossLabel',
+    'hud', 'loopNum', 'dayNum', 'bossMeter', 'bossFill', 'bossPct', 'bossLabel', 'bossChase',
     'btnSpeed', 'btnPause', 'btnRetreat', 'btnPotion', 'potionNum',
     'heroLevel', 'classGlyph', 'heroName',
     'hpFill', 'hpText', 'xpFill', 'xpText',
@@ -56,6 +58,14 @@ export function renderHUD(game) {
   el.bossLabel.textContent = `${run.bossName || '巫妖'}的注视`;
   el.bossMeter.classList.toggle('full', pct >= 100);
   el.bossMeter.classList.toggle('boss-live', !!run.bossSpawned);
+
+  const chasing = (run.enemies || []).find((e) => e.alive && e.boss && e.march?.active);
+  if (chasing) {
+    el.bossChase.classList.remove('hidden');
+    el.bossChase.textContent = `${chasing.name}正在追逐 · 距离 ${Math.max(0, Math.ceil(chasing.march.gap || 0))} 格`;
+  } else {
+    el.bossChase.classList.add('hidden');
+  }
 
   const hpPct = Math.max(0, Math.min(100, (h.hp / h.maxHp) * 100));
   el.hpFill.style.width = `${hpPct}%`;
@@ -117,19 +127,18 @@ function renderEquip(run) {
 }
 
 function statLine(stats) {
-  const names = { atk: '攻击', def: '防御', maxHp: '生命', vamp: '吸血', crit: '暴击', atkSpeed: '攻速' };
   return Object.entries(stats).map(([k, v]) => {
-    const val = k === 'vamp' || k === 'crit' || k === 'atkSpeed' ? `${Math.round(v * 100)}%` : `+${fmt(v)}`;
-    return `${names[k] || k} ${val}`;
+    const val = STAT_PERCENT.has(k) ? `${Math.round(v * 1000) / 10}%` : k === 'atkSpeed' ? `+${Math.round(v * 100)}%` : `+${fmt(v)}`;
+    return `${STAT_LABELS[k] || k} ${val}`;
   }).join('  ');
 }
 
 function renderResources(run) {
   const res = run.resources;
-  el.runRes.innerHTML = `
-    <span class="res wood" title="木材">木材 <b>${res.wood}</b></span>
-    <span class="res stone" title="石料">石料 <b>${res.stone}</b></span>
-    <span class="res soul" title="魂晶">魂晶 <b>${res.soul}</b></span>`;
+  const short = { wood: '木', stone: '石', soul: '魂', metal: '金', shard: '片', tome: '籍' };
+  el.runRes.innerHTML = Object.entries(RES_NAMES)
+    .map(([k, name]) => `<span class="res ${k}" title="${name}">${short[k] || name} <b>${res[k] || 0}</b></span>`)
+    .join('');
 }
 
 function renderQuest(run) {

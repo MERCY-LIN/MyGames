@@ -1,25 +1,62 @@
-// 游戏主循环：营地 <-> 远征，移动/战斗/铺牌/Boss
-import {
-  CELL, OFFSET_Y, BOSS_LOOP, BOSS_METER_MAX, BOSS_METER_PER_CARD, HAND_BASE,
-} from './core/config.js';
+// 游戏编排层：营地 <-> 远征，移动 / 铺牌 / 输入 / 特效
+// S0 拆分后本文件只做状态编排与表现；战斗 / 刷怪 / 手牌 / 经济下沉到 js/systems/*
 import { rng } from './core/rng.js';
+import { BOSS_METER_MAX, BOSS_METER_PER_CARD } from './core/config.js';
 import { CARDS, deckFromMeta } from './data/cards.js';
-import { makeEnemy } from './data/enemies.js';
 import { TRAITS } from './data/traits.js';
-import { classUnlocked, CLASSES } from './data/classes.js';
+import { classUnlocked } from './data/classes.js';
 import { chapterById, chapterUnlocked, INFINITE } from './data/chapters.js';
-import { createMap, cellAt, canPlace, canPlaceReason, placeCard, mapStats, adjacentPath } from './world/loopMap.js';
-import { createHero, deriveHero, gainXp, potionHeal, ensureSkeletons } from './world/hero.js';
-import { rollEquip, equipIfBetter, rollResources, itemScore } from './systems/loot.js';
-import { markCard, markCombo, markEnemy } from './systems/codex.js';
+import { createMap, cellAt, canPlaceReason, placeCard, mapStats } from './world/loopMap.js';
+import { createHero, deriveHero, potionHeal } from './world/hero.js';
+import { rollEquip, equipIfBetter } from './systems/loot.js';
+import { markCard, markCombo } from './systems/codex.js';
 import { loadMeta, saveMeta, clearSave } from './systems/save.js';
 import { build as campBuild } from './systems/camp.js';
 import { toast as hudToast, showHUD, resetHandCache } from './ui/hud.js';
 import {
-  showCamp, hideCamp, showTraits, showPause, showDeath, showVictory, hideOverlay, traitChoices,
+  showCamp, hideCamp, showTraits, showPause, showDeath, showVictory, showLoot, hideOverlay, traitChoices,
 } from './ui/screens.js';
+import * as combat from './systems/combat.js';
+import * as spawner from './systems/spawner.js';
+import * as hand from './systems/hand.js';
+import * as economy from './systems/economy.js';
+import * as board from './systems/board.js';
+import * as tiles from './systems/tiles.js';
+import * as fx from './systems/fx.js';
+import {
+  pathPoint as geomPathPoint, heroPos as geomHeroPos,
+  cellCenter as geomCellCenter, enemyPos as geomEnemyPos,
+} from './systems/geom.js';
 
 const toast = hudToast;
+
+// 逻辑模块与 Game 之间的通道：emit 管表现，ctrl 管游戏流程（内部可改 mode / paused）
+function createContext(game) {
+  const ctx = {
+    rng,
+    emit: {
+      toast: (message, tone = '') => hudToast(message, tone),
+      floatAt: (x, y, text, color, size = 13) => game.floatAt(x, y, text, color, size),
+      burst: (pos, n, color) => game.burst(pos, n, color),
+      flash: (v) => { game.flash = v; },
+      flashMax: (v) => { game.flash = Math.max(game.flash, v); },
+      shake: (v) => { game.shake = v; },
+      shakeMax: (v) => { game.shake = Math.max(game.shake, v); },
+    },
+    ctrl: {
+      die: () => game.die(),
+      victory: () => game.victory(),
+      clearLayer: () => game.clearLayer(),
+      openTraits: () => game.openTraits(),
+      openLoot: (payload) => game.openLoot(payload),
+      offerLoot: (item, opts) => game.offerLoot(item, opts),
+      saveMeta: () => saveMeta(game.meta),
+    },
+    isOver: () => game.mode !== 'run',
+  };
+  Object.defineProperty(ctx, 'meta', { get: () => game.meta });
+  return ctx;
+}
 
 export class Game {
   constructor() {
@@ -34,6 +71,7 @@ export class Game {
     this.time = 0;
     this.flash = 0;
     this.mapRev = 0;
+    this.ctx = createContext(this);
   }
 
   // ---------- 营地 ----------
@@ -108,7 +146,8 @@ export class Game {
       enemies: [], target: null, group: [],
       bossMeter: 0, bossSpawned: false, bossDefeated: false,
       pendingLevels: 0, traitChoices: null,
-      resources: { wood: 0, stone: 0, soul: 0 },
+      resources: { wood: 0, stone: 0, soul: 0, metal: 0, shard: 0, tome: 0 },
+      lootBag: 0,
       mapMods: null, towers: [], slowCells: new Set(),
       particles: [], floats: [],
       drawProgress: 0, dmgDealt: 0, dmgTaken: 0, cardsPlayed: 0,
@@ -132,7 +171,7 @@ export class Game {
     hero.hp = hero.maxHp;
 
     this.fillHand(true);
-    this.spawnLoopEnemies();
+    spawner.spawnLoopEnemies(run, this.ctx);
 
     hideCamp();
     hideOverlay();
@@ -160,22 +199,7 @@ export class Game {
   }
 
   bankResources(run) {
-    if (run.banked) return;
-    run.banked = true;
-
-    // 远征结算奖励：走得越远，带回的补给越多（原地撤退不刷资源）
-    if (run.loop >= 2 || run.kills > 0) {
-      run.resources.wood += 3 + Math.floor(run.loop * 0.8);
-      run.resources.stone += 2 + Math.floor(run.loop * 0.5);
-      if (run.loop >= 5) run.resources.soul += 1;
-    }
-
-    for (const k of Object.keys(run.resources)) {
-      this.meta.resources[k] = (this.meta.resources[k] || 0) + run.resources[k];
-    }
-    this.meta.runs += 1;
-    this.meta.bestLoop = Math.max(this.meta.bestLoop, run.loop);
-    saveMeta(this.meta);
+    economy.bankResources(run, this.ctx);
   }
 
   // ---------- 输入 ----------
@@ -211,13 +235,8 @@ export class Game {
 
   discardCard(i) {
     if (this.mode !== 'run' || this.paused || this.run.traitChoices) return;
-    const run = this.run;
-    const id = run.hand[i];
-    if (!id) return;
-    run.hand.splice(i, 1);
-    run.discard.push(id);
+    if (!hand.discardCard(this.run, this.ctx, i)) return;
     this.selectedCard = null;
-    toast(`弃掉了 ${CARDS[id].name}`);
   }
 
   cancelSelection() {
@@ -226,76 +245,23 @@ export class Game {
   }
 
   cellInfo(x, y) {
-    const run = this.run;
-    if (!run) return null;
-    const c = cellAt(run.map, x, y);
-    if (!c) return null;
-
-    if (c.card) {
-      const def = CARDS[c.card.variant || c.card.id];
-      if (!def) return null;
-      const kind = def.kind === 'roadside' ? '路边地形' : def.kind === 'special' ? '特殊' : '野地地形';
-      return { name: def.name, kind, desc: def.desc };
-    }
-
-    const idx = run.map.pathIndex.get(`${x},${y}`);
-    if (idx === undefined) return null;
-
-    let enemy = null;
-    if (run.target && run.target.cell === idx && run.target.alive) enemy = run.target;
-    else enemy = run.enemies.find((e) => e.alive && e.cell === idx);
-
-    if (enemy) {
-      return {
-        name: enemy.name,
-        kind: enemy.boss ? '首领' : '敌人',
-        desc: `生命 ${Math.ceil(enemy.hp)} / ${enemy.maxHp} · 攻击 ${enemy.atk} · 攻速 ${enemy.speed}${enemy.elite ? ' · 精英' : ''}`,
-      };
-    }
-
-    if (run.hero.cell === idx) {
-      const h = run.hero;
-      return {
-        name: CLASSES[h.classId]?.name || '英雄',
-        kind: '英雄',
-        desc: `生命 ${Math.ceil(h.hp)} / ${Math.round(h.maxHp)} · 攻击 ${h.atk} · 防御 ${h.def}`,
-      };
-    }
-    return null;
+    return board.cellInfo(this.run, x, y);
   }
 
   placementHint(cardId) {
-    const def = CARDS[cardId];
-    if (!def) return '';
-    if (cardId === 'forget') return '需要一块已放置的地形';
-    if (cardId === 'wheat') return '需要紧挨着村庄';
-    if (cardId === 'bloodGrove') return '需要紧挨着森林';
-    if (def.kind === 'roadside') return '只能放在道路旁的空位';
-    if (def.kind === 'landscape') return '可放在环线四周的野地';
-    return '特殊卡牌不能在探索中放置';
+    return board.placementHint(cardId);
   }
 
   placementSummary() {
     const run = this.run;
     if (!run || this.selectedCard == null) return null;
-    const cardId = run.hand[this.selectedCard];
-    const def = CARDS[cardId];
-    if (!def) return null;
-    let valid = 0;
-    for (const row of run.map.grid) {
-      for (const cell of row) if (canPlace(run.map, cell, cardId)) valid += 1;
-    }
-    return { name: def.name, valid, hint: this.placementHint(cardId) };
+    return board.placementSummary(run, run.hand[this.selectedCard]);
   }
 
   placementCheck(x, y) {
     const run = this.run;
     if (!run || this.selectedCard == null) return null;
-    const cardId = run.hand[this.selectedCard];
-    const def = CARDS[cardId];
-    if (!def) return null;
-    const reason = canPlaceReason(run.map, cellAt(run.map, x, y), cardId);
-    return { name: def.name, ok: !reason, reason: reason || '点击放下这张牌' };
+    return board.placementCheck(run, x, y, run.hand[this.selectedCard]);
   }
 
   tryPlace(x, y) {
@@ -401,11 +367,17 @@ export class Game {
       h.hp = Math.min(h.maxHp, h.hp + heal);
     }
 
-    this.updateTowers(dt);
+    combat.tickHeroStatus(run, this.ctx, dt);
+    if (this.mode !== 'run') return;
+
+    spawner.updateBossMarch(run, this.ctx, dt);
+    if (this.mode !== 'run') return;
+
+    spawner.updateTowers(run, this.ctx, dt);
     if (this.mode !== 'run') return;
 
     if (run.target && run.target.alive) {
-      this.updateCombat(dt);
+      combat.updateCombat(run, this.ctx, dt);
     } else {
       run.target = null;
       run.group = [];
@@ -468,7 +440,7 @@ export class Game {
       if (rp.pathIndex !== cell) continue;
       const k = rng.pick(['wood', 'stone', 'soul']);
       run.resources[k] += rp.amount;
-      this.floatAt(this.heroPos().x, this.heroPos().y - 40, `+${rp.amount} ${resName(k)}`, '#c9b77a', 12);
+      this.floatAt(this.heroPos().x, this.heroPos().y - 40, `+${rp.amount} ${economy.resName(k)}`, '#c9b77a', 12);
     }
 
     for (const lp of run.mapMods.libraryPass) {
@@ -493,7 +465,11 @@ export class Game {
     }
 
     const enemy = run.enemies.find((e) => e.alive && e.cell === cell);
-    if (enemy && !run.target) this.startCombat(enemy);
+    if (enemy && !run.target) {
+      combat.triggerEnterAbilities(run, this.ctx, enemy);
+      if (this.mode !== 'run') return;
+      this.startCombat(enemy);
+    }
   }
 
   syncSlots() {
@@ -514,40 +490,11 @@ export class Game {
   }
 
   useForge() {
-    const run = this.run;
-    const h = run.hero;
-    const items = Object.entries(h.equipment).filter(([, it]) => it);
-    if (items.length < 2) return;
-    items.sort((a, b) => itemScore(a[1]) - itemScore(b[1]));
-    const [slot, item] = items[0];
-    h.equipment[slot] = null;
-    h.damageReduction = Math.min(0.12, (h.damageReduction || 0) + 0.04);
-    deriveHero(h, run.mapMods, this.meta);
-    toast(`铁匠炉熔掉了 ${item.name}，减伤 +4%`, 'good');
-    this.floatAt(this.heroPos().x, this.heroPos().y - 44, '+4% 减伤', '#d8b25a', 12);
+    tiles.useForge(this.run, this.ctx);
   }
 
   startQuest(tier) {
-    const run = this.run;
-    if (run.quest) return;
-    const need = tier === 2 ? 8 : 5;
-    run.quest = { tier, need, have: 0 };
-    toast(`${tier === 2 ? '伯爵任务' : '村庄任务'}：击杀 ${need} 个敌人`, 'good');
-  }
-
-  completeQuest() {
-    const run = this.run;
-    const h = run.hero;
-    const q = run.quest;
-    if (!q) return;
-    run.quest = null;
-    const item = rollEquip(run.loop, h.lootBonus + 0.2, rng.pick(h.slotIds));
-    equipIfBetter(h, item);
-    deriveHero(h, run.mapMods, this.meta);
-    run.resources.soul += q.tier === 2 ? 3 : 1;
-    run.resources.stone += q.tier === 2 ? 4 : 2;
-    toast(`任务完成：${item.name}`, 'good');
-    this.burst(this.heroPos(), 12, '#d8b25a');
+    tiles.startQuest(this.run, this.ctx, tier);
   }
 
   useLibrary(lp) {
@@ -559,7 +506,12 @@ export class Game {
       run.discard.push(run.hand.splice(idx, 1)[0]);
     }
     this.drawCards(n);
-    lp.cell.uses = (lp.cell.uses || 0) + n;
+    const prevUses = lp.cell.uses || 0;
+    lp.cell.uses = prevUses + n;
+    if (Math.floor(lp.cell.uses / 5) > Math.floor(prevUses / 5)) {
+      run.resources.shard = (run.resources.shard || 0) + 1;
+      toast('图书室：获得 1 记忆碎片', 'good');
+    }
     this.floatAt(this.heroPos().x, this.heroPos().y - 42, `换牌 ${n}`, '#b8a8d6', 12);
     toast(`图书室：替换了 ${n} 张手牌`, 'good');
     if (lp.cell.uses >= lp.max) {
@@ -586,8 +538,8 @@ export class Game {
     }
     this.floatAt(this.heroPos().x, this.heroPos().y - 26, `+${Math.round(heal)}`, '#8fd6a0', 15);
 
-    this.fillHand();
-    this.spawnLoopEnemies();
+    hand.fillHand(run, this.ctx);
+    spawner.spawnLoopEnemies(run, this.ctx);
     this.maybeSpawnBoss();
 
     // 战场：新一圈的宝箱
@@ -599,469 +551,56 @@ export class Game {
         if ((c.card.variant || c.card.id) !== 'battlefield') continue;
         if (!rng.chance(0.5)) continue;
         const item = rollEquip(run.loop, h.lootBonus + 0.1, rng.pick(h.slotIds));
-        equipIfBetter(h, item);
-        deriveHero(h, run.mapMods, this.meta);
+        this.offerLoot(item);
         toast(`战场宝箱：${item.name}`, 'good');
         chestOpened = true;
         break;
       }
     }
 
+    if (run.lootBag > 0) {
+      const gains = {};
+      for (let i = 0; i < run.lootBag; i++) {
+        const k = rng.pick(['wood', 'stone', 'soul', 'metal']);
+        const amt = rng.int(1, 3);
+        run.resources[k] = (run.resources[k] || 0) + amt;
+        gains[k] = (gains[k] || 0) + amt;
+      }
+      const text = Object.entries(gains).map(([k, v]) => `${economy.resName(k)} ${v}`).join(' · ');
+      toast(`战利品包：${text}`, 'good');
+      run.lootBag = 0;
+    }
+
     toast(`第 ${run.loop} 圈 · 第 ${run.day} 天`, '');
   }
 
-  spawnLoopEnemies() {
-    const run = this.run;
-    const loop = run.loop;
-    let alive = run.enemies.filter((e) => e.alive).length;
-    const cap = Math.max(2, 2 + loop - (run.mapMods.enemyCapReduce || 0));
-    const ramp = Math.min(1, (loop - 1) / 6);
-    const mul = 1 + ((run.enemyMul || 1) - 1) * ramp;
-    for (const row of run.map.grid) {
-      for (const c of row) {
-        if (!c.card) continue;
-        const def = CARDS[c.card.variant || c.card.id];
-        if (!def || (!def.spawn && !def.randomElite)) continue;
-        if (alive >= cap) return;
-        const spawnKey = `${c.x},${c.y}`;
-        if (run.enemies.some((e) => e.alive && e.spawnKey === spawnKey)) continue;
-        if (!rng.chance(0.7)) continue;
-        let type = def.spawn;
-        let elite = rng.chance(0.03 + loop * 0.009);
-        if (def.randomElite) {
-          if (!rng.chance(0.55)) continue;
-          type = rng.pick(['bandit', 'vampire', 'ghoul', 'mimic']);
-          elite = true;
-        }
-        const enemy = makeEnemy(type, loop, { elite, cell: this.adjPath(c), mul });
-        markEnemy(this.meta, type);
-        if (run.mapMods.zeroBeacon != null) {
-          const len = run.map.path.length;
-          const raw = Math.abs(enemy.cell - run.mapMods.zeroBeacon);
-          const dist = Math.min(raw, len - raw);
-          const factor = 0.7 + 0.6 * (dist / len);
-          enemy.hp = Math.round(enemy.hp * factor);
-          enemy.maxHp = enemy.hp;
-          enemy.atk = Math.max(1, Math.round(enemy.atk * factor));
-        }
-        enemy.spawnKey = spawnKey;
-        run.enemies.push(enemy);
-        alive += 1;
-      }
-    }
-  }
+  // ---------- 逻辑模块门面（UI / 渲染 / 测试通过它们调用）----------
 
-  adjPath(c) {
-    return adjacentPath(this.run.map, c);
-  }
+  handMax() { return hand.handMax(this.ctx); }
 
-  // ---------- 战斗 ----------
+  drawCards(n) { hand.drawCards(this.run, this.ctx, n); }
 
-  startCombat(enemy) {
-    const run = this.run;
-    const group = enemy.boss
-      ? [enemy]
-      : run.enemies.filter((e) => e.alive && e.cell === enemy.cell).slice(0, run.loop >= 4 ? 2 : 1);
-    group.forEach((e, i) => {
-      e.slot = i;
-      e.atkTimer = Math.max(e.atkTimer, 0.5 + i * 0.2);
-    });
-    run.group = group;
-    run.target = group[0];
-    run.hero.atkTimer = 0.15;
-    if (run.hero.classId === 'necromancer') ensureSkeletons(run.hero);
-    if (enemy.boss && !enemy.introShown) {
-      enemy.introShown = true;
-      this.flash = 1;
-      this.shake = 10;
-      toast(`${enemy.name}拦住了去路`, 'warn');
-    }
-  }
+  fillHand(all = false) { hand.fillHand(this.run, this.ctx, all); }
 
-  updateCombat(dt) {
-    const run = this.run;
-    const h = run.hero;
-    let group = (run.group || []).filter((x) => x.alive);
-    if (!group.length || !run.target || !run.target.alive) {
-      run.group = group;
-      run.target = group[0] || null;
-      if (!run.target) return;
-    }
-    const e = run.target;
+  spawnLoopEnemies() { spawner.spawnLoopEnemies(this.run, this.ctx); }
 
-    h.atkTimer -= dt;
-    if (h.atkTimer <= 0) {
-      h.atkTimer += 1 / Math.max(0.25, h.atkSpeed);
-      this.heroAttack(e);
-    }
-    if (run.target !== e || !e.alive) return;
+  maybeSpawnBoss() { spawner.maybeSpawnBoss(this.run, this.ctx); }
 
-    if (h.classId === 'necromancer') {
-      this.updateSkeletons(dt, e);
-      if (run.target !== e || !e.alive) return;
-    }
+  nearestEnemy(fromIndex, maxAhead = 22) { return spawner.nearestEnemy(this.run, fromIndex, maxAhead); }
 
-    for (const en of group) {
-      if (!en.alive) continue;
-      en.atkTimer -= dt;
-      if (en.atkTimer <= 0) {
-        en.atkTimer += 1 / Math.max(0.3, en.speed);
-        this.enemyAttack(en);
-        if (this.mode !== 'run') return;
-      }
-    }
+  updateTowers(dt) { spawner.updateTowers(this.run, this.ctx, dt); }
 
-    if (e.boss) {
-      e.summonTimer -= dt;
-      if (e.summonTimer <= 0) {
-        e.summonTimer = 8;
-        this.bossSpecial(e);
-      }
-    }
-  }
+  startCombat(enemy) { combat.startCombat(this.run, this.ctx, enemy); }
 
-  bossSpecial(e) {
-    const run = this.run;
-    const h = run.hero;
-    switch (e.type) {
-      case 'lich':
-        this.summonSkeletons(e, 1);
-        break;
-      case 'priestess': {
-        const heal = Math.round(e.maxHp * 0.03);
-        e.hp = Math.min(e.maxHp, e.hp + heal);
-        const pos = this.enemyPos(e);
-        this.floatAt(pos.x, pos.y - e.r - 10, `+${heal}`, '#8fd6a0', 13);
-        this.summonSkeletons(e, 1);
-        break;
-      }
-      case 'hunter': {
-        const dmg = Math.max(1, e.atk * 0.8 - h.def * 0.35);
-        h.hp -= dmg;
-        run.dmgTaken += dmg;
-        h.hurtFlash = 1;
-        const pos = this.heroPos();
-        this.floatAt(pos.x, pos.y - 26, `-${Math.round(dmg)}`, '#ffb06a', 14);
-        this.floatAt(pos.x, pos.y - 40, '飞刀', '#d8b25a', 11);
-        this.burst(pos, 4, '#d8b25a');
-        if (h.hp <= 0) this.die();
-        break;
-      }
-      case 'omega':
-        this.summonSkeletons(e, 2);
-        this.shake = Math.max(this.shake, 6);
-        break;
-      default:
-        this.summonSkeletons(e, 1);
-    }
-  }
+  updateCombat(dt) { combat.updateCombat(this.run, this.ctx, dt); }
 
-  heroAttack(e) {
-    const run = this.run;
-    const h = run.hero;
-    h.attackAnim = 0.22;
-    const crit = rng.chance(h.crit);
-    let dmg = h.atk * (crit ? h.critDmg : 1);
-    let combo = false;
-    if (h.classId === 'rogue' && rng.chance(0.2)) {
-      dmg *= 1.6;
-      combo = true;
-    }
-    dmg = Math.max(1, dmg);
-    e.hp -= dmg;
-    run.dmgDealt += dmg;
+  killEnemy(e) { combat.killEnemy(this.run, this.ctx, e); }
 
-    if (h.vamp > 0) h.hp = Math.min(h.maxHp, h.hp + dmg * h.vamp);
+  heroAttack(e) { combat.heroAttack(this.run, this.ctx, e); }
 
-    const pos = this.enemyPos(e);
-    this.floatAt(pos.x, pos.y - e.r - 6, `-${Math.round(dmg)}`, crit ? '#ffd45e' : '#ff8f7a', crit ? 18 : 14);
-    if (combo) this.floatAt(pos.x, pos.y - e.r - 22, '连击', '#8fbf9f', 12);
-    this.burst(pos, crit ? 8 : 4, crit ? '#ffd45e' : '#e06a55');
-    if (crit) this.shake = Math.max(this.shake, 4);
-
-    if (e.hp <= 0) this.killEnemy(e);
-    else if (e.boss && !e.phase2 && e.hp <= e.maxHp * 0.5) {
-      e.phase2 = true;
-      e.atk = Math.round(e.atk * 1.35);
-      this.flash = 0.8;
-      toast(`${e.name}进入狂暴，攻击力提升`, 'warn');
-      this.summonSkeletons(e, 2);
-    }
-  }
-
-  updateSkeletons(dt, e) {
-    const h = this.run.hero;
-    for (const sk of h.skeletons) {
-      if (sk.hp <= 0) continue;
-      sk.timer -= dt;
-      if (sk.timer > 0) continue;
-      sk.timer += 0.9;
-      e.hp -= sk.atk;
-      this.run.dmgDealt += sk.atk;
-      const pos = this.enemyPos(e);
-      this.floatAt(pos.x + rng.float(-9, 9), pos.y - e.r - 2, `-${Math.round(sk.atk)}`, '#cfd6c9', 11);
-      this.burst(pos, 2, '#cfd6c9');
-      if (e.hp <= 0) { this.killEnemy(e); return; }
-    }
-  }
-
-  counterAttack(e) {
-    const run = this.run;
-    const h = run.hero;
-    const dmg = Math.max(1, h.atk * 0.8);
-    e.hp -= dmg;
-    run.dmgDealt += dmg;
-    const pos = this.enemyPos(e);
-    this.floatAt(pos.x, pos.y - e.r - 20, '反击', '#e8c07a', 12);
-    this.burst(pos, 3, '#e8c07a');
-    if (e.hp <= 0) this.killEnemy(e);
-  }
-
-  enemyAttack(e) {
-    const run = this.run;
-    const h = run.hero;
-    if (h.invuln > 0) return;
-
-    const aliveSk = h.skeletons.filter((s) => s.hp > 0);
-    if (aliveSk.length && rng.chance(0.65)) {
-      const sk = rng.pick(aliveSk);
-      const dmg = Math.max(1, e.atk * 0.85 - 1);
-      sk.hp -= dmg;
-      const pos = this.heroPos();
-      this.floatAt(pos.x + rng.float(-14, 14), pos.y - 16, `-${Math.round(dmg)}`, '#cfd6c9', 11);
-      this.burst(pos, 2, '#cfd6c9');
-      if (sk.hp <= 0) {
-        h.skeletons = h.skeletons.filter((s) => s !== sk);
-        this.floatAt(pos.x, pos.y - 32, '骷髅倒下', '#8b8578', 12);
-        this.burst(pos, 8, '#cfd6c9');
-      }
-      return;
-    }
-
-    if (rng.chance(h.evade)) {
-      const pos = this.heroPos();
-      this.floatAt(pos.x, pos.y - 26, '闪避', '#9fd6ff', 13);
-      return;
-    }
-    const dmg = Math.max(1, (e.atk - h.def * 0.7) * (1 - Math.min(0.4, run.mapMods.enemyDmgReduce || 0)) * (1 - (h.damageReduction || 0)) * (run.group.length > 1 ? 0.9 : 1));
-    h.hp -= dmg;
-    run.dmgTaken += dmg;
-    h.hurtFlash = 1;
-    this.shake = Math.max(this.shake, 3.5);
-
-    if (e.vamp > 0) e.hp = Math.min(e.maxHp, e.hp + dmg * e.vamp);
-
-    const pos = this.heroPos();
-    this.floatAt(pos.x, pos.y - 26, `-${Math.round(dmg)}`, '#ff6b5e', 14);
-    this.burst(pos, 4, '#c0483f');
-
-    if (h.hp <= 0) { this.die(); return; }
-    if (h.classId === 'warrior' && e.alive && rng.chance(h.counterChance || 0.2)) this.counterAttack(e);
-  }
-
-  summonSkeletons(boss, count) {
-    const run = this.run;
-    for (let i = 0; i < count; i++) {
-      const sk = makeEnemy('skeleton', run.loop, { cell: boss.cell, mul: run.enemyMul });
-      sk.hp = Math.round(sk.hp * 0.5);
-      sk.maxHp = sk.hp;
-      sk.summoned = true;
-      sk.atkTimer = 1.5;
-      run.enemies.push(sk);
-      if (run.group && run.group.length < 2) {
-        sk.slot = run.group.length;
-        run.group.push(sk);
-      }
-      const pos = this.enemyPos(sk);
-      this.burst(pos, 8, '#c9c4b4');
-    }
-    toast('巫妖召唤了骷髅', 'warn');
-  }
-
-  killEnemy(e) {
-    if (!e.alive) return;
-    const run = this.run;
-    const h = run.hero;
-    e.alive = false;
-    e.hp = 0;
-    const wasTarget = run.target === e;
-    if (wasTarget) run.target = null;
-    run.group = (run.group || []).filter((x) => x !== e && x.alive);
-    if (wasTarget && run.group.length) run.target = run.group[0];
-
-    run.kills += 1;
-    if (run.quest) {
-      run.quest.have += 1;
-      if (run.quest.have >= run.quest.need) this.completeQuest();
-    }
-    const pos = this.enemyPos(e);
-    this.burst(pos, 14, e.color);
-    this.floatAt(pos.x, pos.y - 30, '击杀', '#d8c58a', 13);
-
-    const xp = Math.round(e.xp * (1 + (run.mapMods.xpBonus || 0)));
-    if (xp > 0) {
-      const ups = gainXp(h, xp);
-      run.pendingLevels += ups;
-    }
-
-    const drops = rollResources(e, run.loop);
-    if (drops.wood > 0 && this.meta.buildings.lumberjack) drops.wood += 1;
-    if (drops.stone > 0 && this.meta.buildings.smelter) drops.stone += 1;
-    for (const [k, v] of Object.entries(drops)) {
-      if (!v) continue;
-      run.resources[k] += v;
-      this.floatAt(pos.x + rng.float(-10, 10), pos.y - 44, `+${v} ${resName(k)}`, '#c9b77a', 12);
-    }
-
-    // 盗贼：顺手牵羊
-    if (h.classId === 'rogue' && rng.chance(0.6)) {
-      const k = rng.pick(['wood', 'stone', 'soul']);
-      run.resources[k] += 1;
-      this.floatAt(pos.x + rng.float(-14, 14), pos.y - 56, `+1 ${resName(k)}`, '#8fbf9f', 11);
-    }
-
-    // 宝库：额外魂晶
-    if (run.mapMods.soulChance && rng.chance(run.mapMods.soulChance)) {
-      run.resources.soul += 1;
-      this.floatAt(pos.x + rng.float(-18, 18), pos.y - 68, '+1 魂晶', '#a98bd0', 11);
-    }
-
-    // 祖先墓穴：击杀有灵魂的敌人提升生命上限
-    if (run.mapMods.soulMaxHp && e.loot && e.loot.soul) {
-      h.bonus.maxHp += run.mapMods.soulMaxHp;
-      deriveHero(h, run.mapMods, this.meta);
-      h.hp = Math.min(h.maxHp, h.hp + run.mapMods.soulMaxHp);
-      this.floatAt(pos.x, pos.y - 78, `+${run.mapMods.soulMaxHp} 最大生命`, '#a98bd0', 11);
-    }
-
-    const lootChance = 0.2 + h.lootBonus + (e.elite ? 0.2 : 0);
-    if (e.guaranteeEquip || rng.chance(lootChance)) {
-      const item = rollEquip(run.loop, h.lootBonus, rng.pick(h.slotIds));
-      const result = equipIfBetter(h, item);
-      deriveHero(h, run.mapMods, this.meta);
-      if (result.equipped) {
-        toast(`装备：${item.name}（${item.slotName}）`, 'good');
-        this.burst(pos, 10, '#d8b25a');
-      } else {
-        this.floatAt(pos.x, pos.y - 56, '装备不如身上', '#8a8578', 11);
-      }
-    }
-
-    run.drawProgress += 1;
-    if (run.drawProgress >= 2) {
-      run.drawProgress = 0;
-      this.fillHand();
-    }
-
-    if (e.boss) {
-      if (run.infinite) this.clearLayer();
-      else this.victory();
-      return;
-    }
-
-    if (run.pendingLevels > 0 && !run.traitChoices) {
-      this.openTraits();
-      return;
-    }
-
-    if (this.mode !== 'run' || (run.target && run.target.alive)) return;
-    const next = run.enemies.find((x) => x.alive && x.cell === h.cell);
-    if (next) this.startCombat(next);
-  }
-
-  openTraits() {
-    const run = this.run;
-    if (run.pendingLevels <= 0) return;
-    run.traitChoices = traitChoices(rng, run.hero);
-    this.paused = true;
-    showTraits(this, run.traitChoices);
-  }
-
-  chooseTrait(id) {
-    const run = this.run;
-    if (!run || !run.traitChoices) return;
-    const trait = TRAITS.find((t) => t.id === id);
-    if (!trait || !run.traitChoices.some((t) => t.id === id)) return;
-    trait.apply(run.hero);
-    run.hero.traits.push(id);
-    deriveHero(run.hero, run.mapMods, this.meta);
-    run.pendingLevels -= 1;
-    run.traitChoices = null;
-    this.paused = false;
-    hideOverlay();
-    toast(`获得天赋：${trait.name}`, 'good');
-    if (run.pendingLevels > 0) this.openTraits();
-  }
-
-  // ---------- 塔与周期伤害 ----------
-
-  updateTowers(dt) {
-    const run = this.run;
-    for (const t of run.towers) {
-      t.timer += dt;
-      if (t.timer < t.every) continue;
-      t.timer = 0;
-      const target = this.nearestEnemy(t.pathIndex, 22);
-      if (!target) continue;
-      this.damageEnemy(target, t.dmg, t.type);
-      const from = this.cellCenter({ x: t.x, y: t.y });
-      const to = this.enemyPos(target);
-      run.particles.push({
-        type: 'beam', x: from.x, y: from.y, x2: to.x, y2: to.y,
-        life: 0.25, maxLife: 0.25, color: t.type === 'bolt' ? '#a9b6ff' : '#d8c58a', size: 2,
-      });
-      if (this.mode !== 'run') return;
-    }
-  }
-
-  nearestEnemy(fromIndex, maxAhead = 22) {
-    const run = this.run;
-    const len = run.map.path.length;
-    if (run.target && run.target.alive) return run.target;
-    let best = null, bestD = Infinity;
-    for (const e of run.enemies) {
-      if (!e.alive) continue;
-      const d = (e.cell - fromIndex + len) % len;
-      if (d > 0 && d <= maxAhead && d < bestD) { bestD = d; best = e; }
-    }
-    return best;
-  }
-
-  damageEnemy(e, dmg, kind = 'hit') {
-    if (!e.alive) return;
-    e.hp -= dmg;
-    const pos = this.enemyPos(e);
-    this.floatAt(pos.x, pos.y - e.r - 4, `-${Math.round(dmg)}`, kind === 'bolt' ? '#a9b6ff' : '#e8d9a8', 12);
-    this.burst(pos, 3, kind === 'bolt' ? '#a9b6ff' : '#e8d9a8');
-    if (e.hp <= 0) this.killEnemy(e);
-  }
+  damageEnemy(e, dmg, kind = 'hit') { combat.damageEnemy(this.run, this.ctx, e, dmg, kind); }
 
   // ---------- Boss / 结算 ----------
-
-  maybeSpawnBoss() {
-    const run = this.run;
-    if (run.bossSpawned || run.bossDefeated) return;
-    if (run.bossMeter < BOSS_METER_MAX) return;
-    const loopGate = run.bossLoop || BOSS_LOOP;
-    if (run.loop < loopGate) return;
-
-    const len = run.map.path.length;
-    const cell = Math.floor(len * 0.5);
-    const boss = makeEnemy(run.bossType || 'lich', run.loop, { cell, mul: run.enemyMul || 1 });
-    markEnemy(this.meta, run.bossType || 'lich');
-    boss.spawnKey = 'boss';
-    const power = (1 + (run.mapMods.bossPower || 0)) *
-      (1 + (run.layer || 0) * 0.28) *
-      (1 + Math.max(0, run.loop - loopGate) * 0.12);
-    boss.hp = Math.round(boss.hp * power);
-    boss.maxHp = boss.hp;
-    boss.atk = Math.round(boss.atk * power);
-    run.enemies.push(boss);
-    run.bossSpawned = true;
-    this.flash = 1;
-    this.shake = 14;
-    toast(`${boss.name}在环线对面等你`, 'warn');
-  }
 
   clearLayer() {
     const run = this.run;
@@ -1122,107 +661,155 @@ export class Game {
     showDeath(this);
   }
 
-  // ---------- 手牌 ----------
+  // ---------- 天赋 ----------
 
-  handMax() {
-    return HAND_BASE + Math.min(2, this.meta.buildings.intel || 0);
+  openTraits() {
+    const run = this.run;
+    if (run.pendingLevels <= 0) return;
+    run.traitChoices = traitChoices(rng, run.hero);
+    this.paused = true;
+    showTraits(this, run.traitChoices);
   }
 
-  drawCards(n) {
+  chooseTrait(id) {
     const run = this.run;
-    for (let i = 0; i < n; i++) {
-      if (!run.deck.length) {
-        if (!run.discard.length) return;
-        run.deck = rng.shuffle(run.discard);
-        run.discard = [];
+    if (!run || !run.traitChoices) return;
+    const trait = TRAITS.find((t) => t.id === id);
+    if (!trait || !run.traitChoices.some((t) => t.id === id)) return;
+    trait.apply(run.hero);
+    run.hero.traits.push(id);
+    deriveHero(run.hero, run.mapMods, this.meta);
+    run.pendingLevels -= 1;
+    run.traitChoices = null;
+    this.paused = false;
+    hideOverlay();
+    toast(`获得天赋：${trait.name}`, 'good');
+    if (run.pendingLevels > 0) this.openTraits();
+  }
+
+  offerLoot(item, { force = false } = {}) {
+    const run = this.run;
+    if (!item || !run) return;
+    const h = run.hero;
+    if (!force && this.meta.autoEquip) {
+      const res = equipIfBetter(h, item);
+      deriveHero(h, run.mapMods, this.meta);
+      if (res.equipped) toast(`装备：${item.name}`, 'good');
+      return;
+    }
+    run.lootQueue = run.lootQueue || [];
+    run.lootQueue.push(item);
+    if (!run.pendingLoot) this.nextLoot();
+  }
+
+  nextLoot() {
+    const run = this.run;
+    if (!run || run.pendingLoot) return;
+    const item = run.lootQueue?.shift();
+    if (!item) {
+      this.paused = false;
+      if (run.pendingLevels > 0) this.openTraits();
+      return;
+    }
+    const slot = item.slot;
+    const current = run.hero.equipment[slot] || null;
+    run.pendingLoot = { item, current, slot };
+    this.paused = true;
+    showLoot(this, run.pendingLoot);
+  }
+
+  openLoot(payload) {
+    if (!this.run) return;
+    this.run.pendingLoot = payload;
+    this.paused = true;
+    showLoot(this, payload);
+  }
+
+  resolveLoot(action) {
+    const run = this.run;
+    const p = run?.pendingLoot;
+    if (!p) return;
+    if (typeof action === 'boolean') action = action ? 'equip' : 'discard';
+    const h = run.hero;
+    run.pendingLoot = null;
+
+    if (action === 'equip') {
+      if (p.current) {
+        if (h.inventory.length < h.maxInventory) h.inventory.push(p.current);
+        else toast(`背包已满，${p.current.name}被丢弃`, 'warn');
       }
-      run.hand.push(run.deck.pop());
-      markCard(this.meta, run.hand[run.hand.length - 1]);
+      h.equipment[p.slot] = p.item;
+      deriveHero(h, run.mapMods, this.meta);
+      toast(`换上${p.item.name}`, 'good');
+    } else if (action === 'stash') {
+      if (h.inventory.length < h.maxInventory) {
+        h.inventory.push(p.item);
+        toast(`收进背包：${p.item.name}`, 'good');
+      } else {
+        toast('背包已满（12）', 'warn');
+        run.pendingLoot = p;
+        return;
+      }
+    } else {
+      toast(`丢弃${p.item.name}`, '');
+    }
+
+    hideOverlay();
+    if (run.lootQueue?.length) {
+      this.nextLoot();
+    } else {
+      this.paused = false;
+      if (run.pendingLevels > 0) this.openTraits();
     }
   }
 
-  fillHand(all = false) {
+  toggleAutoEquip() {
+    this.meta.autoEquip = !this.meta.autoEquip;
+    saveMeta(this.meta);
+    showPause(this);
+  }
+
+  equipFromInventory(index) {
     const run = this.run;
-    const max = this.handMax();
-    const target = all ? max : Math.min(max, run.hand.length + 1);
-    while (run.hand.length < target) {
-      if (!run.deck.length) {
-        if (!run.discard.length) break;
-        run.deck = rng.shuffle(run.discard);
-        run.discard = [];
-      }
-      run.hand.push(run.deck.pop());
-      markCard(this.meta, run.hand[run.hand.length - 1]);
-    }
+    const h = run?.hero;
+    const item = h?.inventory[index];
+    if (!item) return;
+    h.inventory.splice(index, 1);
+    const old = h.equipment[item.slot];
+    h.equipment[item.slot] = item;
+    if (old) h.inventory.push(old);
+    deriveHero(h, run.mapMods, this.meta);
+    showPause(this);
+  }
+
+  discardInventory(index) {
+    const run = this.run;
+    const h = run?.hero;
+    if (!h?.inventory[index]) return;
+    const [item] = h.inventory.splice(index, 1);
+    toast(`丢弃${item.name}`, '');
+    showPause(this);
   }
 
   // ---------- 坐标与特效 ----------
 
-  pathPoint(pos) {
-    const map = this.run.map;
-    const len = map.path.length;
-    const wrapped = ((pos % len) + len) % len;
-    const i = Math.floor(wrapped);
-    const f = wrapped - i;
-    const a = map.path[i];
-    const b = map.path[(i + 1) % len];
-    return {
-      x: (a.x + (b.x - a.x) * f + 0.5) * CELL,
-      y: (a.y + (b.y - a.y) * f + 0.5) * CELL + OFFSET_Y,
-    };
-  }
+  pathPoint(pos) { return geomPathPoint(this.run.map, pos); }
 
-  heroPos() { return this.pathPoint(this.run.hero.pos); }
+  heroPos() { return geomHeroPos(this.run); }
 
-  cellCenter(c) {
-    return { x: (c.x + 0.5) * CELL, y: (c.y + 0.5) * CELL + OFFSET_Y };
-  }
+  cellCenter(c) { return geomCellCenter(c); }
 
-  enemyPos(e) {
-    const p = this.run.map.path[e.cell] || this.run.map.path[0];
-    const slot = e.slot;
-    const ox = slot == null ? 0 : (slot - 0.5) * 22;
-    const oy = slot == null ? 0 : slot * 5;
-    return { x: (p.x + 0.5) * CELL + ox, y: (p.y + 0.5) * CELL + OFFSET_Y + oy };
-  }
+  enemyPos(e) { return geomEnemyPos(this.run, e); }
 
   floatAt(x, y, text, color, size = 13) {
-    this.run.floats.push({ x, y, text, color, size, life: 1.0, maxLife: 1.0, vx: rng.float(-12, 12) });
+    fx.floatAt(this.run, x, y, text, color, size);
   }
 
   burst(pos, n, color) {
-    for (let i = 0; i < n; i++) {
-      const a = rng.float(0, Math.PI * 2);
-      const sp = rng.float(30, 110);
-      this.run.particles.push({
-        type: 'spark', x: pos.x, y: pos.y,
-        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 20,
-        life: rng.float(0.25, 0.55), maxLife: 0.55,
-        color, size: rng.float(1, 2.6),
-      });
-    }
+    fx.burst(this.run, pos, n, color);
   }
 
   updateEffects(dt) {
-    const run = this.run;
-    for (const p of run.particles) {
-      if (p.type === 'beam') { p.life -= dt; continue; }
-      p.life -= dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 150 * dt;
-    }
-    run.particles = run.particles.filter((p) => p.life > 0);
-
-    for (const f of run.floats) {
-      f.life -= dt;
-      f.y -= 26 * dt;
-      f.x += f.vx * dt;
-    }
-    run.floats = run.floats.filter((f) => f.life > 0);
+    fx.updateEffects(this.run, dt);
   }
-}
-
-function resName(k) {
-  return { wood: '木材', stone: '石料', soul: '魂晶' }[k] || k;
 }

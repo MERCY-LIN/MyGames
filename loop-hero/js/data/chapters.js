@@ -12,7 +12,7 @@ export const CHAPTERS = {
   },
   3: {
     id: 3, name: '猎手之夜', bossName: '猎手', boss: 'hunter',
-    bossLoop: 10, enemyMul: 1.15, unlock: 2, color: '#8f9a6a',
+    bossLoop: 10, enemyMul: 1.12, unlock: 2, color: '#8f9a6a',
     desc: '雾里有人吹响号角。猎手会在远处投掷飞刀，并伺机打出致命一击。',
   },
   4: {

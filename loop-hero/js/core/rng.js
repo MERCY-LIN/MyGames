@@ -4,6 +4,12 @@ export class RNG {
     this.seed = seed >>> 0;
     this.s = this.seed;
   }
+  // S0.3：可复现模拟 / 平衡回归测试的种子注入
+  reset(seed = Date.now() >>> 0) {
+    this.seed = seed >>> 0;
+    this.s = this.seed;
+    return this;
+  }
   next() {
     this.s |= 0;
     this.s = (this.s + 0x6d2b79f5) | 0;

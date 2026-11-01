@@ -1,6 +1,7 @@
 // 战利品：装备生成、比较、资源掉落
 import { RARITY } from '../core/config.js';
 import { rng } from '../core/rng.js';
+import { AFFIX_POOL, AFFIX_KEYS, affixValue } from '../data/itemAffixes.js';
 
 const NAMES = {
   weapon: ['铁剑', '战斧', '长枪', '弯刀', '碎骨锤'],
@@ -27,23 +28,22 @@ export function rollRarity(luck = 0) {
 
 export function rollEquip(loop, luck = 0, slot = null) {
   slot = slot || rng.pick(['weapon', 'armor', 'amulet']);
-  const kind = slot === 'armor' ? 'armor' : (slot === 'amulet' || slot === 'ring') ? 'amulet' : 'weapon';
   const rarity = rollRarity(luck);
-  const mult = RARITY[rarity].mult;
   const stats = {};
   const lv = Math.max(1, loop);
-  const factor = slot === 'offhand' ? 0.78 : slot === 'staff' ? 0.85 : 1;
-
-  if (kind === 'weapon') {
-    stats.atk = round1((2 + lv * 0.85) * mult * factor * rng.float(0.9, 1.1));
-    if (rarity !== 'common') stats.crit = round3(0.02 * (rarity === 'epic' ? 2 : 1));
-  } else if (kind === 'armor') {
-    stats.def = round1((1 + lv * 0.4) * mult * rng.float(0.9, 1.1));
-    stats.maxHp = Math.round((8 + lv * 3) * mult);
-  } else {
-    stats.vamp = round3(0.015 * mult * rng.float(0.9, 1.1));
-    stats.maxHp = Math.round((4 + lv * 1.5) * mult);
-    if (rarity === 'epic') stats.crit = 0.03;
+  const tiers = ['common'];
+  if (rarity === 'rare' || rarity === 'epic') tiers.push('rare');
+  if (rarity === 'epic') tiers.push('epic');
+  const pool = AFFIX_POOL[slot] || AFFIX_POOL.weapon;
+  for (const tier of tiers) {
+    for (const key of pool[tier] || []) {
+      const base = affixValue(key, rarity, lv);
+      const jitter = key === 'atk' || key === 'def' || key === 'maxHp' ? rng.float(0.9, 1.1) : 1;
+      stats[key] = round3((stats[key] || 0) + base * jitter);
+    }
+  }
+  for (const key of Object.keys(stats)) {
+    if (!AFFIX_KEYS.includes(key)) delete stats[key];
   }
 
   const prefix = rarity === 'epic' ? '古老的' : rarity === 'rare' ? '精制的' : '';
@@ -62,7 +62,10 @@ export function itemScore(it) {
   if (!it) return 0;
   const s = it.stats || {};
   return (s.atk || 0) * 3.2 + (s.def || 0) * 4.5 + (s.maxHp || 0) * 0.45 +
-    (s.vamp || 0) * 90 + (s.crit || 0) * 70 + (s.atkSpeed || 0) * 120;
+    (s.vamp || 0) * 90 + (s.crit || 0) * 70 + (s.atkSpeed || 0) * 120 +
+    (s.critDmg || 0) * 40 + (s.regen || 0) * 6 + (s.evade || 0) * 90 +
+    (s.counterChance || 0) * 80 + (s.damageReduction || 0) * 600 +
+    (s.lootBonus || 0) * 50 + (s.xpBonus || 0) * 40;
 }
 
 export function equipIfBetter(h, item) {
@@ -75,13 +78,16 @@ export function equipIfBetter(h, item) {
 }
 
 export function rollResources(enemy, loop) {
-  const out = { wood: 0, stone: 0, soul: 0 };
+  const out = { wood: 0, stone: 0, soul: 0, metal: 0, shard: 0, tome: 0 };
   const amount = 1 + Math.floor(loop / 3);
   for (const [res, chance] of Object.entries(enemy.loot || {})) {
     if (rng.chance(chance)) out[res] += rng.int(1, amount);
   }
+  if (enemy.elite) {
+    if (rng.chance(0.25)) out.metal += 1;
+    if (rng.chance(0.15)) out.shard += 1;
+  }
   return out;
 }
 
-function round1(v) { return Math.round(v * 10) / 10; }
 function round3(v) { return Math.round(v * 1000) / 1000; }

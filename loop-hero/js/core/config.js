@@ -35,3 +35,13 @@ export const RARITY = {
   rare: { name: '稀有', color: '#6fa8d6', mult: 1.55 },
   epic: { name: '史诗', color: '#c98bd6', mult: 2.2 },
 };
+
+export const STAT_LABELS = {
+  atk: '攻击', def: '防御', maxHp: '生命', vamp: '吸血', crit: '暴击', atkSpeed: '攻速',
+  critDmg: '暴伤', regen: '回复', evade: '闪避', lootBonus: '掉落', xpBonus: '经验',
+  counterChance: '反击', damageReduction: '减伤',
+};
+
+export const STAT_PERCENT = new Set([
+  'vamp', 'crit', 'critDmg', 'evade', 'lootBonus', 'xpBonus', 'counterChance', 'damageReduction',
+]);

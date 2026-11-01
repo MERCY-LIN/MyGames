@@ -973,6 +973,15 @@ function drawHero(ctx, pos, h, t, game) {
     ctx.fillStyle = `rgba(255, 80, 60, ${0.35 * h.hurtFlash})`;
     ctx.beginPath(); ctx.arc(0, -6, 15, 0, Math.PI * 2); ctx.fill();
   }
+  if (h.status?.some((st) => st.kind === 'poison')) {
+    ctx.fillStyle = 'rgba(143, 214, 160, 0.75)';
+    for (let i = 0; i < 3; i++) {
+      const a = (t * 2 + i * 2.1) % (Math.PI * 2);
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * 8, -20 + Math.sin(a) * 3, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   if (h.classId === 'rogue') {
     // 斗篷
@@ -1138,6 +1147,15 @@ function drawEnemy(ctx, e, pos, t, game) {
     ctx.beginPath(); ctx.arc(0, 0, e.r + 5, 0, Math.PI * 2); ctx.stroke();
   }
   ctx.restore();
+
+  if (e.march?.active) {
+    const jump = Math.abs(Math.sin(t * 4)) * 5;
+    ctx.fillStyle = '#e05a4a';
+    ctx.font = 'bold 18px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('!', x, y - e.r - 16 - jump);
+    ctx.textAlign = 'left';
+  }
 
   drawBar(ctx, x - (boss ? 28 : 13), y - e.r - (boss ? 18 : 12), boss ? 56 : 26, boss ? 5 : 3, e.hp / e.maxHp, boss ? '#b07ad6' : P.hp);
   if (boss) {

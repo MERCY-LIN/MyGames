@@ -52,6 +52,14 @@ export function initInput(game, canvas) {
     if (ev.repeat) return;
     const key = ev.key;
 
+    if (game.run?.pendingLoot) {
+      if (key === '1') game.resolveLoot('equip');
+      else if (key === '2') game.resolveLoot('stash');
+      else if (key === '3' || key === 'Escape') game.resolveLoot('discard');
+      ev.preventDefault();
+      return;
+    }
+
     if (key === 'Escape') {
       if (game.mode === 'run' && game.paused && !game.run?.traitChoices) {
         game.togglePause();

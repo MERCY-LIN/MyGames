@@ -11,7 +11,11 @@ import { CLASSES, classUnlocked } from '../js/data/classes.js';
 import { CHAPTERS, INFINITE, chapterUnlocked, chapterById } from '../js/data/chapters.js';
 import { defaultMeta } from '../js/systems/save.js';
 import { build } from '../js/systems/camp.js';
+import { missingRequires } from '../js/systems/camp.js';
+import { BUILDINGS } from '../js/data/buildings.js';
 import { markCard, markCombo, markEnemy, seenCard, seenCombo, seenEnemy } from '../js/systems/codex.js';
+import { AFFIX_KEYS } from '../js/data/itemAffixes.js';
+import { handMax } from '../js/systems/hand.js';
 
 let passed = 0;
 let failed = 0;
@@ -299,11 +303,11 @@ test('营地训练场与装备参与属性推导', () => {
   const meta = defaultMeta();
   meta.buildings.gym = 2;
   const h = createHero(meta);
-  assert.equal(h.maxHp, 115 + 20);
+  assert.equal(h.maxHp, 123 + 24);
   const sword = { slot: 'weapon', stats: { atk: 4 }, rarity: 'rare' };
   equipIfBetter(h, sword);
   deriveHero(h, { maxHp: 5, atkSpeed: 0.1, regen: 1 }, meta);
-  assert.equal(h.maxHp, 115 + 20 + 5);
+  assert.equal(h.maxHp, 123 + 24 + 5);
   assert.equal(h.atk, 14);
   assert.ok(h.atkSpeed > 1.09);
 });
@@ -531,6 +535,67 @@ test('图鉴记录与重复标记', () => {
   assert.equal(seenCombo(meta, 'same:forest'), true);
   markEnemy(meta, 'slime');
   assert.equal(seenEnemy(meta, 'slime'), true);
+});
+
+console.log('建筑树');
+test('所有建筑 lv1 无前置', () => {
+  const meta = defaultMeta();
+  for (const b of BUILDINGS) {
+    assert.deepEqual(missingRequires(meta, b.id, 1), [], `${b.name} lv1 不应有前置`);
+  }
+});
+
+test('高阶建筑校验前置并给出原因', () => {
+  const meta = defaultMeta();
+  meta.resources = { wood: 9999, stone: 9999, soul: 9999, metal: 9999, shard: 9999, tome: 9999 };
+  assert.equal(build(meta, 'forge').ok, true, 'forge lv1 可建');
+  const blocked = build(meta, 'forge');
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /铁匠铺/);
+  assert.equal(build(meta, 'smithy').ok, true);
+  assert.equal(build(meta, 'forge').ok, true, '铁匠铺 lv1 后 forge 可升 lv2');
+});
+
+test('六资源与手牌上限生效', () => {
+  const meta = defaultMeta();
+  for (const k of ['wood', 'stone', 'soul', 'metal', 'shard', 'tome']) {
+    assert.equal(typeof meta.resources[k], 'number');
+  }
+  meta.buildings.intel = 3;
+  meta.buildings.library = 2;
+  assert.equal(handMax({ meta }), 9);
+});
+
+console.log('装备词条');
+test('随机装备只生成有消费点的词条', () => {
+  const slots = ['weapon', 'offhand', 'armor', 'amulet', 'staff', 'ring'];
+  for (const slot of slots) {
+    for (let i = 0; i < 200; i++) {
+      const item = rollEquip(5, 0.2, slot);
+      assert.ok(Object.keys(item.stats).length > 0);
+      for (const key of Object.keys(item.stats)) {
+        assert.ok(AFFIX_KEYS.includes(key), `${slot} 生成了未接线词条 ${key}`);
+      }
+    }
+  }
+});
+
+test('暴伤/反击/减伤/经验/回复/闪避接入 deriveHero', () => {
+  const meta = defaultMeta();
+  const h = createHero(meta, 'warrior');
+  const base = { ...h };
+  h.equipment.weapon = {
+    slot: 'weapon',
+    stats: { critDmg: 0.2, counterChance: 0.1, damageReduction: 0.05, lootBonus: 0.1, xpBonus: 0.08 },
+  };
+  h.equipment.armor = { slot: 'armor', stats: { regen: 0.5, evade: 0.03 } };
+  deriveHero(h, null, meta);
+  assert.ok(h.critDmg >= base.critDmg + 0.2);
+  assert.ok(h.counterChance >= 0.3);
+  assert.equal(h.damageReduction, 0.05);
+  assert.ok(h.xpBonus >= 0.08);
+  assert.ok(h.regen >= base.regen + 0.5);
+  assert.ok(h.evade >= base.evade + 0.03);
 });
 
 console.log(`\n${passed} 项通过${failed ? `，${failed} 项失败` : ''}`);

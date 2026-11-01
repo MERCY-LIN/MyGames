@@ -6,7 +6,7 @@ const shot = process.argv[3];
 const reload = process.argv[4] === 'reload';
 const size = process.argv[5];
 
-const targets = await (await fetch('http://127.0.0.1:9222/json/list')).json();
+const targets = await (await fetch(`http://127.0.0.1:${process.env.CDP_PORT || 9222}/json/list`)).json();
 const page = targets.find((t) => t.type === 'page' && t.url.includes('5173')) || targets.find((t) => t.type === 'page');
 if (!page) throw new Error('no page target');
 
